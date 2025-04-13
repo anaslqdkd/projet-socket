@@ -1,8 +1,8 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O2
 
-AGENT_SRC = agent.c
-ORCH_SRC = orchestrator.c
+AGENT_SRC = src/agent.c
+ORCH_SRC = src/orchestrator.c
 
 AGENT_BIN = agent
 ORCH_BIN = orchestrator
