@@ -9,8 +9,8 @@
 #include <unistd.h>
 
 #define BUFFER_SIZE 1000
-#define NUM_AGENTS 3
 #define MAX_AGENT_NAME 50
+#define NUM_AGENTS 3
 
 struct sockaddr_in serv_addr[NUM_AGENTS];
 char agent_names[NUM_AGENTS][MAX_AGENT_NAME];
