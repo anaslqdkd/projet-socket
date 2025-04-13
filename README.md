@@ -8,6 +8,10 @@ Pour compiler tous les scripts, faire un `make` dans la racine du projet.
 
 #### Prérequis
 
+- sudo dnf install openssl openssl-devel
+
+#### Remarques
+
 - Toutes les VMs (4 par défaut) sont sur le même réseau virtuel ;
 - Chacune a une adresse IP valide et unique ;
 - Chaque VM "agent" a lancé le script "agent.c" sur un port spécifique, commun à toutes les VMs ;
@@ -27,11 +31,19 @@ sudo firewall-cmd --add-port=<port>/tcp --permanent
 sudo firewall-cmd --reload
 ```
 
-- Enfin, exécutez le script `agent.c` sur chaque VM "agent", et le script `orchestrator.c` sur la dernière VM.
+- Générer les clés du CA, si elles ne sont pas déjà générées, en exécutant `./src/generate_ca.sh`.
+
+- Enfin, exécutez les scripts `agent.c` sur chaque VM "agent", et `orchestrator.c` sur la dernière VM, en suivant les protocoles ci-dessous.
 
 ### Agents
 
-Pour lancer les agents, compiler le script, et exécuter :
+Pour lancer les agents, il faut d'abord générer le certificat et la clé qui permettront l'encryption des communications. Pour cela, exécuter (sur chaque VM "agent") :
+
+```bash
+./generate_agent_cert.sh <nom de l'agent>
+```
+
+Vous aurez peut-être besoin de rendre ce script exécutable avec `chmod +x generate_certification.sh`. Une fois que le certificat et la clé sont générés, il suffit compiler le script, et exécuter :
 
 ```bash
 ./agent <numéro de port>
@@ -41,7 +53,13 @@ Pour lancer les agents, compiler le script, et exécuter :
 
 ### Orchestrateur
 
-L'orchestrateur nécessite que les trois agents soient fonctionnels (et lancés) pour pouvoir s'initialiser correctement. Il suffit ensuite d'exécuter :
+De même, l'orchestrateur aura besoin de certificat et clé, il faudra donc exécuter sur la VM "orchestratrice" (avec éventuellement un `chmod`) :
+
+```bash
+./generate_orchestrator_cert.sh
+```
+
+L'orchestrateur nécessite enfin que les trois agents soient fonctionnels (et lancés) pour pouvoir s'initialiser correctement. Il suffit ensuite d'exécuter :
 
 ```bash
 ./orchestrator <IP1> <IP2> <IP3> <port> [name1 name2 name3]

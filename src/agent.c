@@ -1,5 +1,4 @@
 #include <netinet/in.h>
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,78 +6,154 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 
 #define BUFFER_SIZE 1000
 
-int dialogSocket;
-int clilen;
-
-struct sockaddr_in cli_addr;
-struct sockaddr_in serv_addr;
-
-void func (int sockfd) {
-    /*TODO: add encryption with openssl*/
+void func(SSL* ssl) {
     char buff[BUFFER_SIZE];
     while (1) {
-        bzero (buff, BUFFER_SIZE);
+        bzero(buff, BUFFER_SIZE);
+        int bytes = SSL_read(ssl, buff, sizeof(buff));
+        if (bytes <= 0) break;
 
-        read (sockfd, buff, sizeof (buff));
-
-        printf ("Reçu de l'orchestrateur : %s", buff);
-        FILE* fp = popen (buff, "r");
-        bzero (buff, BUFFER_SIZE);
+        printf("Reçu de l'orchestrateur : %s", buff);
+        FILE* fp = popen(buff, "r");
+        bzero(buff, BUFFER_SIZE);
 
         bool valid_command = false;
-
-        while (fgets (buff, sizeof (buff), fp) != NULL) {
-            write (sockfd, buff, strlen (buff));
+        while (fgets(buff, sizeof(buff), fp) != NULL) {
+            SSL_write(ssl, buff, strlen(buff));
             valid_command = true;
         }
+
         if (!valid_command) {
-            char* error_message = "La commande envoyée n'est pas valide !\n";
-            write (dialogSocket, error_message, strlen (error_message));
+            const char* error_message = "La commande envoyée n'est pas valide !\n";
+            SSL_write(ssl, error_message, strlen(error_message));
         }
-        pclose (fp);
+
+        pclose(fp);
     }
 }
 
-int main (int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <port>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
     int port = atoi(argv[1]);
 
-    int serverSocket = socket (PF_INET, SOCK_STREAM, 0);
-    if (serverSocket < 0) {
-        perror ("Erreur dans la création de la socket.");
-        exit (1);
-    }
-    bzero (&serv_addr, sizeof (serv_addr));
-    serv_addr.sin_family      = AF_INET;
-    serv_addr.sin_addr.s_addr = htonl (INADDR_ANY);
-    serv_addr.sin_port        = htons (port);
+    // OpenSSL setup
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_all_algorithms();
 
-    if (bind (serverSocket, (struct sockaddr*)&serv_addr, sizeof (serv_addr)) < 0) {
-        perror ("servecho: erreur bind\n");
-        exit (1);
-    }
-    if (listen (serverSocket, SOMAXCONN) < 0) {
-        perror ("servecho: erreur listen\n");
-        exit (1);
-    }
-    printf ("Listening on port %s\n", argv[1]);
-    dialogSocket = accept (serverSocket, (struct sockaddr*)&cli_addr, (socklen_t*)&clilen);
-    if (dialogSocket < 0) {
-        perror ("servecho : erreur accept\n");
-        exit (1);
+    SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx) {
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
     }
 
-    printf ("Orchestrateur connecté !\n");
-    while (1) {
-        func (dialogSocket);
+    // Load agent's certificate and private key
+    if (SSL_CTX_use_certificate_file(ctx, "certs/agent-cert.pem", SSL_FILETYPE_PEM) <= 0) {
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
+    if (SSL_CTX_use_PrivateKey_file(ctx, "certs/agent-key.pem", SSL_FILETYPE_PEM) <= 0) {
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
     }
 
-    close (serverSocket);
+    // Verify that the private key matches the certificate
+    if (!SSL_CTX_check_private_key(ctx)) {
+        fprintf(stderr, "La clé privée ne correspond pas au certificat public\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // Load CA certificate to verify the orchestrator's certificate
+    if (SSL_CTX_load_verify_locations(ctx, "ca/ca-cert.pem", NULL) <= 0) {
+        ERR_print_errors_fp(stderr);
+        exit(EXIT_FAILURE);
+    }
+
+    // Set the verification mode to verify the orchestrator's certificate
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+    SSL_CTX_set_verify_depth(ctx, 1);
+
+    // TCP socket setup
+    int serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in serv_addr, cli_addr;
+    socklen_t clilen = sizeof(cli_addr);
+
+    bzero(&serv_addr, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = INADDR_ANY;
+    serv_addr.sin_port = htons(port);
+
+    if (bind(serverSocket, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
+        perror("Erreur bind");
+        exit(1);
+    }
+
+    if (listen(serverSocket, SOMAXCONN) < 0) {
+        perror("Erreur listen");
+        exit(1);
+    }
+
+    printf("Agent écoutant sur le port %d...\n", port);
+
+    int clientSocket = accept(serverSocket, (struct sockaddr*)&cli_addr, &clilen);
+    if (clientSocket < 0) {
+        perror("Erreur accept");
+        exit(1);
+    }
+
+    printf("Orchestrateur connecté !\n");
+
+    // TLS handshake
+    SSL* ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, clientSocket);
+    if (SSL_accept(ssl) <= 0) {
+        ERR_print_errors_fp(stderr);
+        close(clientSocket);
+        SSL_free(ssl);
+        SSL_CTX_free(ctx);
+        return 1;
+    }
+
+    // Verify the orchestrator's certificate
+    X509* cert = SSL_get_peer_certificate(ssl);
+    if (cert == NULL) {
+        fprintf(stderr, "L'orchestrateur n'a pas fourni de certificat !\n");
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        close(clientSocket);
+        SSL_CTX_free(ctx);
+        return 1;
+    }
+
+    // Check if the orchestrator's certificate is valid
+    if (SSL_get_verify_result(ssl) != X509_V_OK) {
+        fprintf(stderr, "Le certificat de l'orchestrateur est invalide !\n");
+        X509_free(cert);
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        close(clientSocket);
+        SSL_CTX_free(ctx);
+        return 1;
+    }
+
+    printf("Certificat de l'orchestrateur vérifié avec succès !\n");
+    X509_free(cert);
+
+    func(ssl);
+
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+    close(clientSocket);
+    close(serverSocket);
+    SSL_CTX_free(ctx);
+
     return 0;
 }

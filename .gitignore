@@ -4,4 +4,6 @@ orchestrator
 
 *.o
 
-
+# Not pushing the private CA key (should only be used to sign CSRs on the "admin" machine)
+ca-key.pem
+ca-cert.srl
