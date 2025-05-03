@@ -41,11 +41,14 @@ void run_scanner (SSL* ssl, char* command) {
     switch (scanner) {
     case NMAP:
         printf ("Lancement du scanner Nmap avec la command : %s\n", command);
+        break;
     case ZAP:
         printf ("Lancement du scanner Zap avec la command : %s\n", command);
+        break;
     case NIKTO:
         printf ("Lancement du scanner Nikto avec la command : %s\n", command);
-    case NONE: printf ("Command inconnue %s\n", command);
+        break;
+    case NONE: printf ("Command inconnue %s\n", command); break;
     }
 
     char cmd_with_redirect[BUFFER_SIZE];
