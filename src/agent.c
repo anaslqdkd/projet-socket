@@ -11,13 +11,42 @@
 
 #define BUFFER_SIZE 100000
 
+typedef enum {
+    NMAP,
+    ZAP,
+    NIKTO,
+    NONE,
+} scanner;
+
+scanner get_scanner_type (char* command) {
+    if (strstr (command, "nmap") != NULL) {
+        return NMAP;
+    } else if (strstr (command, "zap") != NULL ||
+    strstr (command, "zap-cli") != NULL || strstr (command, "zap.sh") != NULL) {
+        return ZAP;
+    } else if (strstr (command, "nikto") != NULL) {
+        return NIKTO;
+    } else {
+        return NONE;
+    }
+}
+
 void run_scanner (SSL* ssl, char* command) {
     FILE* fp;
     char output[BUFFER_SIZE];
     char* full_output = NULL;
     size_t total_size = 0;
+    scanner scanner   = get_scanner_type (command);
 
-    printf ("Lancement du scanner avec la commande : %s\n", command);
+    switch (scanner) {
+    case NMAP:
+        printf ("Lancement du scanner Nmap avec la command : %s\n", command);
+    case ZAP:
+        printf ("Lancement du scanner Zap avec la command : %s\n", command);
+    case NIKTO:
+        printf ("Lancement du scanner Nikto avec la command : %s\n", command);
+    case NONE: printf ("Command inconnue %s\n", command);
+    }
 
     char cmd_with_redirect[BUFFER_SIZE];
     snprintf (cmd_with_redirect, sizeof (cmd_with_redirect), "%s 2>&1", command);
@@ -71,9 +100,11 @@ void func (SSL* ssl) {
         buff[bytes] = '\0';
         if (strstr (buff, "nmap") != NULL) {
             run_scanner (ssl, buff);
-        } else {
-            const char* msg = "Error idk";
-            SSL_write (ssl, msg, strlen (msg));
+        } else if (strstr (buff, "zap") != NULL ||
+        strstr (buff, "zap-cli") != NULL || strstr (buff, "zap.sh") != NULL) {
+            run_scanner (ssl, buff);
+        } else if (strstr (buff, "nikto") != NULL) {
+            run_scanner (ssl, buff);
         }
     }
 }
