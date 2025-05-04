@@ -37,18 +37,25 @@ void run_scanner (SSL* ssl, char* command) {
     char* full_output = NULL;
     size_t total_size = 0;
     scanner scanner   = get_scanner_type (command);
+    char* scanner_name;
 
     switch (scanner) {
     case NMAP:
         printf ("Lancement du scanner Nmap avec la command : %s\n", command);
+        scanner_name = "nmap";
         break;
     case ZAP:
         printf ("Lancement du scanner Zap avec la command : %s\n", command);
+        scanner_name = "zap";
         break;
     case NIKTO:
         printf ("Lancement du scanner Nikto avec la command : %s\n", command);
+        scanner_name = "nikto";
         break;
-    case NONE: printf ("Command inconnue %s\n", command); break;
+    case NONE:
+        printf ("Command inconnue %s\n", command);
+        break;
+        scanner_name = "unknown";
     }
 
     char cmd_with_redirect[BUFFER_SIZE];
@@ -81,8 +88,10 @@ void run_scanner (SSL* ssl, char* command) {
     pclose (fp);
 
     if (total_size == 0) {
-        const char* msg = "Aucune sortie de la commande.\n";
-        SSL_write (ssl, msg, strlen (msg));
+        char buffer_msg[1000];
+        snprintf (buffer_msg, sizeof (buffer_msg),
+        "Aucune sortie de la commande. Verifiez que %s est installé\n", scanner_name);
+        SSL_write (ssl, buffer_msg, strlen (buffer_msg));
     } else {
         SSL_write (ssl, full_output, total_size);
     }
@@ -108,6 +117,10 @@ void func (SSL* ssl) {
             run_scanner (ssl, buff);
         } else if (strstr (buff, "nikto") != NULL) {
             run_scanner (ssl, buff);
+        } else {
+            const char* error = "Type de scanner ou commande non reconnue. \n";
+            SSL_write (ssl, error, strlen (error));
+            return;
         }
     }
 }
