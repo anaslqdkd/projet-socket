@@ -54,8 +54,8 @@ void run_scanner (SSL* ssl, char* command) {
         break;
     case NONE:
         printf ("Command inconnue %s\n", command);
-        break;
         scanner_name = "unknown";
+        break;
     }
 
     char cmd_with_redirect[BUFFER_SIZE];
@@ -120,7 +120,6 @@ void func (SSL* ssl) {
         } else {
             const char* error = "Type de scanner ou commande non reconnue. \n";
             SSL_write (ssl, error, strlen (error));
-            return;
         }
     }
 }
