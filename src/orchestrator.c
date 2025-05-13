@@ -2,6 +2,7 @@
 #include <netinet/in.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,29 +13,29 @@
 
 #define BUFFER_SIZE 1000
 #define MAX_AGENT_NAME 50
-#define NUM_AGENTS 1
+#define NUM_AGENTS 3
+#define MAX_COMMAND_LENGTH 256
 
-struct sockaddr_in serv_addr[NUM_AGENTS];
-char agent_names[NUM_AGENTS][MAX_AGENT_NAME];
+// Structure to pass data to threads
+typedef struct {
+    int agent_id;
+    SSL* ssl;
+    char name[MAX_AGENT_NAME];
+    int running;
+    pthread_mutex_t mutex;
+    char command_buffer[BUFFER_SIZE];
+    int has_command;
+} agent_thread_data_t;
 
-void send_command (SSL* ssl, const char* agent_name) {
-    char buff[BUFFER_SIZE];
-    int n;
-    bzero (buff, sizeof (buff));
-    printf ("Commande pour %s : ", agent_name);
-    n = 0;
-    while ((buff[n++] = getchar ()) != '\n') {
-    }
+// Global variables
+agent_thread_data_t agent_data[NUM_AGENTS];
+pthread_t agent_threads[NUM_AGENTS];
+pthread_mutex_t global_print_mutex;
 
-    SSL_write (ssl, buff, strlen (buff));
-    bzero (buff, sizeof (buff));
-    SSL_read (ssl, buff, sizeof (buff));
-    printf ("Réponse de %s : %s", agent_name, buff);
-
-    if ((strncmp (buff, "exit", 4)) == 0) {
-        printf ("Fermeture de la connexion avec %s...\n", agent_name);
-    }
-}
+void* agent_handler (void* arg);
+void send_command_to_agent (int agent_id, const char* command);
+void setup_ssl_connections (char** argv, int port);
+void cleanup_connections ();
 
 int main (int argc, char** argv) {
     if (argc < NUM_AGENTS + 2 || argc > 2 * NUM_AGENTS + 2) {
@@ -44,18 +45,140 @@ int main (int argc, char** argv) {
     }
 
     int port = atoi (argv[NUM_AGENTS + 1]);
-    int sockfds[NUM_AGENTS];
-    SSL* ssl_connections[NUM_AGENTS];
 
-    // Optional agent names
     for (int i = 0; i < NUM_AGENTS; ++i) {
         if (argc > NUM_AGENTS + 2 + i) {
-            strncpy (agent_names[i], argv[NUM_AGENTS + 2 + i], MAX_AGENT_NAME - 1);
-            agent_names[i][MAX_AGENT_NAME - 1] = '\0';
+            strncpy (agent_data[i].name, argv[NUM_AGENTS + 2 + i], MAX_AGENT_NAME - 1);
+            agent_data[i].name[MAX_AGENT_NAME - 1] = '\0';
         } else {
-            snprintf (agent_names[i], MAX_AGENT_NAME, "Agent %d", i + 1);
+            snprintf (agent_data[i].name, MAX_AGENT_NAME, "Agent %d", i + 1);
+        }
+        agent_data[i].agent_id    = i;
+        agent_data[i].running     = 1;
+        agent_data[i].has_command = 0;
+        pthread_mutex_init (&agent_data[i].mutex, NULL);
+    }
+
+    pthread_mutex_init (&global_print_mutex, NULL);
+
+    setup_ssl_connections (argv, port);
+
+    for (int i = 0; i < NUM_AGENTS; ++i) {
+        if (pthread_create (&agent_threads[i], NULL, agent_handler,
+            (void*)&agent_data[i]) != 0) {
+            perror ("Erreur de creation de thread");
+            exit (EXIT_FAILURE);
         }
     }
+
+    char input_buffer[MAX_COMMAND_LENGTH];
+    int target;
+
+    // Main command loop
+    while (1) {
+        printf ("\nChoose an agent to send a command (1-%d) or 0 to exit: ", NUM_AGENTS);
+        if (scanf ("%d", &target) != 1) {
+            // Clear input buffer on error
+            while (getchar () != '\n')
+                ;
+            continue;
+        }
+
+        // Clear the newline from the input buffer
+        while (getchar () != '\n')
+            ;
+
+        if (target == 0) {
+            break;
+        }
+
+        if (target < 1 || target > NUM_AGENTS) {
+            printf ("Invalid agent number.\n");
+            continue;
+        }
+
+        printf ("Command for %s: ", agent_data[target - 1].name);
+        if (fgets (input_buffer, MAX_COMMAND_LENGTH, stdin) == NULL) {
+            continue;
+        }
+
+        // Remove trailing newline
+        input_buffer[strcspn (input_buffer, "\n")] = 0;
+
+        // Send command to the selected agent
+        send_command_to_agent (target - 1, input_buffer);
+
+        // Check if exit command
+        if (strcmp (input_buffer, "exit") == 0) {
+            printf ("Closing connection with %s...\n", agent_data[target - 1].name);
+        }
+    }
+
+    // Signal all threads to exit and wait for them
+    for (int i = 0; i < NUM_AGENTS; ++i) {
+        agent_data[i].running = 0;
+        pthread_join (agent_threads[i], NULL);
+    }
+
+    // Cleanup all resources
+    cleanup_connections ();
+
+    return 0;
+}
+
+void* agent_handler (void* arg) {
+    agent_thread_data_t* data = (agent_thread_data_t*)arg;
+    char response[BUFFER_SIZE];
+
+    while (data->running) {
+        // Check if there's a command to send
+        pthread_mutex_lock (&data->mutex);
+        int has_command = data->has_command;
+        char command[BUFFER_SIZE];
+        if (has_command) {
+            strcpy (command, data->command_buffer);
+            data->has_command = 0;
+        }
+        pthread_mutex_unlock (&data->mutex);
+
+        if (has_command) {
+            // Send command to agent
+            SSL_write (data->ssl, command, strlen (command));
+
+            // Read response
+            bzero (response, sizeof (response));
+            int bytes = SSL_read (data->ssl, response, sizeof (response));
+
+            if (bytes > 0) {
+                // Thread-safe printing
+                pthread_mutex_lock (&global_print_mutex);
+                printf ("\n[%s Response]: %s\n", data->name, response);
+                printf (
+                "\nChoose an agent to send a command (1-%d) or 0 to exit: ", NUM_AGENTS);
+                fflush (stdout);
+                pthread_mutex_unlock (&global_print_mutex);
+            }
+        }
+
+        usleep (100000);
+    }
+
+    return NULL;
+}
+
+// Send a command to an agent via its thread
+void send_command_to_agent (int agent_id, const char* command) {
+    pthread_mutex_lock (&agent_data[agent_id].mutex);
+    strncpy (agent_data[agent_id].command_buffer, command, BUFFER_SIZE - 1);
+    agent_data[agent_id].command_buffer[BUFFER_SIZE - 1] = '\0';
+    agent_data[agent_id].has_command                     = 1;
+    pthread_mutex_unlock (&agent_data[agent_id].mutex);
+}
+
+// Setup SSL connections to all agents
+void setup_ssl_connections (char** argv, int port) {
+    struct sockaddr_in serv_addr[NUM_AGENTS];
+    int sockfds[NUM_AGENTS];
 
     // Init OpenSSL
     SSL_library_init ();
@@ -86,7 +209,7 @@ int main (int argc, char** argv) {
         exit (EXIT_FAILURE);
     }
 
-    // Setup and connect to each agent with SSL
+    // Connect to each agent
     for (int i = 0; i < NUM_AGENTS; ++i) {
         sockfds[i] = socket (PF_INET, SOCK_STREAM, 0);
         if (sockfds[i] < 0) {
@@ -101,8 +224,8 @@ int main (int argc, char** argv) {
 
         if (connect (sockfds[i], (struct sockaddr*)&serv_addr[i],
             sizeof (serv_addr[i])) < 0) {
-            fprintf (stderr, "Erreur de connexion à %s (%s)\n", agent_names[i],
-            argv[i + 1]);
+            fprintf (stderr, "Erreur de connexion à %s (%s)\n",
+            agent_data[i].name, argv[i + 1]);
             close (sockfds[i]);
             exit (EXIT_FAILURE);
         }
@@ -112,48 +235,27 @@ int main (int argc, char** argv) {
         SSL_set_fd (ssl, sockfds[i]);
 
         if (SSL_connect (ssl) <= 0) {
-            fprintf (stderr, "Échec SSL avec %s (%s)\n", agent_names[i], argv[i + 1]);
+            fprintf (stderr, "Échec SSL avec %s (%s)\n", agent_data[i].name, argv[i + 1]);
             ERR_print_errors_fp (stderr);
             SSL_free (ssl);
             close (sockfds[i]);
             exit (EXIT_FAILURE);
         }
 
-        ssl_connections[i] = ssl;
-
-        printf ("Connecté en TLS à %s (%s) avec succès !\n", agent_names[i], argv[i + 1]);
+        agent_data[i].ssl = ssl;
+        printf ("Connecté en TLS à %s (%s) avec succès !\n", agent_data[i].name,
+        argv[i + 1]);
     }
+}
 
-    // Command loop
-    while (1) {
-        int target;
-        printf ("\nÀ quel agent voulez-vous envoyer la commande ? (1 à %d, ou "
-                "0 pour quitter): ",
-        NUM_AGENTS);
-        scanf ("%d", &target);
-        while (getchar () != '\n')
-            ; // Clear input buffer
+void cleanup_connections () {
+    printf ("Fermeture des connexions....");
 
-        if (target == 0) {
-            printf ("Fermeture des connexions...\n");
-            break;
-        }
-
-        if (target < 1 || target > NUM_AGENTS) {
-            printf ("Numéro d'agent invalide.\n");
-            continue;
-        }
-
-        send_command (ssl_connections[target - 1], agent_names[target - 1]);
-    }
-
-    // Cleanup
     for (int i = 0; i < NUM_AGENTS; ++i) {
-        SSL_shutdown (ssl_connections[i]);
-        SSL_free (ssl_connections[i]);
-        close (sockfds[i]);
+        SSL_shutdown (agent_data[i].ssl);
+        SSL_free (agent_data[i].ssl);
+        pthread_mutex_destroy (&agent_data[i].mutex);
     }
-    SSL_CTX_free (ctx);
+    pthread_mutex_destroy (&global_print_mutex);
     EVP_cleanup ();
-    return 0;
 }

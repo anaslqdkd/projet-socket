@@ -6,6 +6,18 @@ Pour compiler tous les scripts, faire un `make` dans la racine du projet.
 
 ### Conditions d'utilisation
 
+#### Dépendances
+
+- openssl
+```bash
+sudo apt install libssl-dev # pour debian/ubuntu etc
+sudo dnf install openssl openssl-devel # pour fedora  
+sudo pacman -S openssl # arch
+```
+pour les autres dépendances, à installer de la même manière en remplaçant par le programme cible
+- gcc pour compiler le projet
+- nikto, nmap et zap/owasp sur chaque machine correspondant à l'agent
+
 #### Prérequis
 
 - sudo dnf install openssl openssl-devel
@@ -66,3 +78,17 @@ L'orchestrateur nécessite enfin que les trois agents soient fonctionnels (et la
 ```
 
 **Notes :** Des noms peuvent être donnés aux agents. Le nombre d'agents est défini en macro dans `orchestrator.c` (`#define NUM_AGENTS 3`).
+
+### Fonctionnement
+
+Un agent execute la commande reçue dans un thread dédié, cela permet à l'orchestrateur de continuer à envoyer des commandes à d'autres agent sans être bloqué par l'exécution d'une autre commande. La réponse est envoyé uniquement lorsque **l'exécution est terminée** afin d'éviter d'avoir des mélanges des réponses des differents commandes préalablement executés, par conséquent, il est attendu de n'avoir un retour qu'après un certain temps, notamment lorsque la commande requert beaucoup de temps (par exemple, un scan de ports large ou une analyse complète de vulnérabilités). On a toute de même mis un temps limite afin d'éviter des commandes bloqués sans réponse.
+
+On pourra essayer d'executer les commandes suivantes dans un premier temps pour voir le fonctionnement sans intrusion dans un domain non autorisé : 
+```bash
+nmap -T4 -F scanme.nmap.org 
+```
+```bash
+sudo nmap -sS -sV -T4 -v -p- scanme.nmap.org # commande plus lente
+```
+Pour les commandes en sudo, il faudra les executer dans un shell root (pas testé mais à priori ça ne devrait pas poser problème) ou depuis une machine qui ne requert pas de mot de passe pour root (ça c'est testé).
+
