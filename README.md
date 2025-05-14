@@ -92,3 +92,7 @@ sudo nmap -sS -sV -T4 -v -p- scanme.nmap.org # commande plus lente
 ```
 Pour les commandes en sudo, il faudra les executer dans un shell root (pas testé mais à priori ça ne devrait pas poser problème) ou depuis une machine qui ne requert pas de mot de passe pour root (ça c'est testé).
 
+### Remarques
+
+Tous les tests (finaux) ont été sur effectués sur des WM avec Manjaro (Arch) mais à priori le programme est independant de la distribution choisie.
+
